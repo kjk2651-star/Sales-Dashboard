@@ -233,10 +233,15 @@ export default function MarketPricePage() {
         if (!selCategory) return [];
         const models = new Set<string>();
         history.forEach(h => h.items.forEach(i => {
-            if (i.category === selCategory && (!selBrand || i.brand === selBrand)) models.add(i.model);
+            if (i.category === selCategory &&
+                (!selBrand || i.brand === selBrand) &&
+                (selChipsets.length === 0 || (i.spec && selChipsets.includes(i.spec)))
+            ) {
+                models.add(i.model);
+            }
         }));
         return Array.from(models).sort();
-    }, [history, selCategory, selBrand]);
+    }, [history, selCategory, selBrand, selChipsets]);
 
     const uniqueChipsets = useMemo(() => {
         if (!selCategory || (selCategory !== 'MB' && selCategory !== 'VGA')) return [];
@@ -370,6 +375,56 @@ export default function MarketPricePage() {
         return history[history.length - 1].date;
     }, [history]);
 
+    // -- [New] 3. Price Volatility TOP 10 (Gainers/Losers) --
+    const priceVolatility = useMemo(() => {
+        if (history.length < 2 || !selCategory) return { gainers: [], losers: [] };
+
+        const allDates = Array.from(new Set(history.map(h => h.date))).sort(
+            (a, b) => new Date(b).getTime() - new Date(a).getTime() // Latest first
+        );
+
+        if (allDates.length < 2) return { gainers: [], losers: [] };
+
+        const d1 = allDates[0]; // Latest
+        const d2 = allDates[1]; // Previous
+
+        const h1 = history.find(h => h.date === d1);
+        const h2 = history.find(h => h.date === d2);
+
+        if (!h1 || !h2) return { gainers: [], losers: [] };
+
+        const diffs: any[] = [];
+
+        // Use h1 (latest) as base to find current products
+        h1.items.forEach(item1 => {
+            if (item1.category !== selCategory) return;
+            if (selBrand && item1.brand !== selBrand) return;
+            if (selChipsets.length > 0 && (!item1.spec || !selChipsets.includes(item1.spec))) return;
+
+            // Find same product in h2
+            const item2 = h2.items.find(i => i.model === item1.model && i.brand === item1.brand && i.category === item1.category);
+
+            if (item2 && item2.price > 0 && item1.price > 0) {
+                const diff = item1.price - item2.price;
+                const pct = (diff / item2.price) * 100;
+                if (diff !== 0) {
+                    diffs.push({
+                        model: item1.model,
+                        brand: item1.brand,
+                        oldPrice: item2.price,
+                        newPrice: item1.price,
+                        diff,
+                        pct
+                    });
+                }
+            }
+        });
+
+        const gainers = [...diffs].sort((a, b) => b.pct - a.pct).slice(0, 10);
+        const losers = [...diffs].sort((a, b) => a.pct - b.pct).slice(0, 10);
+
+        return { gainers, losers };
+    }, [history, selCategory, selBrand, selChipsets]);
     const filteredTableData = useMemo(() => {
         if (!selCategory || history.length === 0) return [];
 
@@ -461,20 +516,103 @@ export default function MarketPricePage() {
                     </Tabs.List>
 
                     <Tabs.Panel value="product">
+                        <Paper withBorder p="xs" mb="md" bg="gray.0" radius="md">
+                            <Tabs
+                                variant="pills"
+                                value={selCategory}
+                                onChange={(v) => {
+                                    setSelCategory(v);
+                                    setSelBrand(null);
+                                    setSelProducts([]);
+                                    setSelChipsets([]);
+                                }}
+                            >
+                                <Tabs.List>
+                                    {uniqueCategories.map(cat => (
+                                        <Tabs.Tab key={cat} value={cat} px="lg">{cat}</Tabs.Tab>
+                                    ))}
+                                </Tabs.List>
+                            </Tabs>
+                        </Paper>
+
                         <Group mb="xs" align="flex-end">
                             <Select
-                                label="1. 카테고리" placeholder="Category" data={uniqueCategories} value={selCategory}
-                                onChange={(v) => { setSelCategory(v); setSelBrand(null); setSelProducts([]); setSelChipsets([]); }} searchable
-                            />
-                            <Select
-                                label="2. 브랜드 (선택)" placeholder="All Brands" data={uniqueBrands} value={selBrand}
+                                label="1. 브랜드 (선택)" placeholder="All Brands" data={uniqueBrands} value={selBrand}
                                 onChange={(v) => { setSelBrand(v); setSelProducts([]); }} searchable clearable disabled={!selCategory}
+                                w={180}
                             />
+                            {(selCategory === 'MB' || selCategory === 'VGA') && (
+                                <MultiSelect
+                                    label="2. 칩셋 필터" placeholder="칩셋 선택"
+                                    data={uniqueChipsets} value={selChipsets} onChange={setSelChipsets}
+                                    searchable clearable w={220}
+                                />
+                            )}
                             <MultiSelect
                                 label={`3. 모델 선택 (${uniqueModels.length}개)`} data={uniqueModels} value={selProducts} onChange={setSelProducts}
-                                searchable maxValues={5} w={500} disabled={!selCategory}
+                                searchable maxValues={5} flex={1} disabled={!selCategory}
+                                placeholder="최대 5개까지 비교 가능"
                             />
                         </Group>
+
+                        {/* Model Comparison Table (GAP) */}
+                        {selProducts.length > 0 && (
+                            <Paper withBorder p="sm" mb="md" radius="md" bg="blue.0">
+                                <Table variant="vertical" layout="fixed" withTableBorder bg="white">
+                                    <Table.Thead bg="blue.1">
+                                        <Table.Tr>
+                                            <Table.Th w={250}>모델명</Table.Th>
+                                            <Table.Th w={180} style={{ textAlign: 'right' }}>최신 가격 (날짜)</Table.Th>
+                                            <Table.Th style={{ textAlign: 'right' }}>MSRP</Table.Th>
+                                            <Table.Th style={{ textAlign: 'right' }}>GAP (%)</Table.Th>
+                                        </Table.Tr>
+                                    </Table.Thead>
+                                    <Table.Tbody>
+                                        {selProducts.map((model, idx) => {
+                                            const latestHist = history[history.length - 1];
+                                            const histItem = latestHist?.items.find(i => i.model === model && i.category === selCategory);
+                                            const latestPrice = histItem?.price || 0;
+                                            const latestDateStr = latestHist?.date || "N/A";
+
+                                            // Calculate GAP based on first selected model (idx 0)
+                                            let gapStr = "-";
+                                            let gapColor = "gray";
+                                            if (idx > 0 && selProducts.length > 1) {
+                                                const baseModel = selProducts[0];
+                                                const basePrice = history[history.length - 1]?.items.find(i => i.model === baseModel && i.category === selCategory)?.price || 0;
+                                                if (basePrice > 0 && latestPrice > 0) {
+                                                    const gap = ((basePrice - latestPrice) / latestPrice) * 100;
+                                                    gapStr = `${gap > 0 ? '+' : ''}${gap.toFixed(1)}%`;
+                                                    gapColor = gap > 0 ? "red" : (gap < 0 ? "blue" : "gray");
+                                                }
+                                            }
+
+                                            return (
+                                                <Table.Tr key={model}>
+                                                    <Table.Td>
+                                                        <Group gap="xs">
+                                                            <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }} />
+                                                            <Text size="sm" fw={idx === 0 ? 700 : 400}>{model}</Text>
+                                                            {idx === 0 && <Badge size="xs" variant="outline">기준</Badge>}
+                                                        </Group>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="sm" fw={700}>{latestPrice.toLocaleString()}원</Text>
+                                                        <Text size="xs" c="dimmed">({tableDateFormatter(latestDateStr)})</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="sm">{latestPrice.toLocaleString()}원</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text fw={700} c={gapColor}>{gapStr}</Text>
+                                                    </Table.Td>
+                                                </Table.Tr>
+                                            );
+                                        })}
+                                    </Table.Tbody>
+                                </Table>
+                            </Paper>
+                        )}
 
                         <Group mb="lg" gap="xs">
                             <IconInfoCircle size={14} color="gray" />
@@ -517,6 +655,82 @@ export default function MarketPricePage() {
                         ) : (
                             <Alert color="blue" variant="light" icon={<IconFilter />}>모델을 선택하면 가격 변동 그래프가 표시됩니다.</Alert>
                         )}
+
+                        {/* TOP 10 Price Changes */}
+                        <Grid mt="xl" gutter="lg">
+                            <Grid.Col span={{ base: 12, md: 6 }}>
+                                <Paper withBorder p="md" radius="md">
+                                    <Group mb="xs">
+                                        <Badge color="red" variant="filled" size="lg">TOP 10 가격 상승</Badge>
+                                        <Text size="xs" c="dimmed">전일 대비 (기존 카테고리/필터 내)</Text>
+                                    </Group>
+                                    <Table verticalSpacing="xs" highlightOnHover striped withColumnBorders withTableBorder>
+                                        <Table.Thead bg="red.0">
+                                            <Table.Tr>
+                                                <Table.Th>제품명</Table.Th>
+                                                <Table.Th style={{ textAlign: 'right' }}>최신 가격</Table.Th>
+                                                <Table.Th style={{ textAlign: 'right' }}>변동률</Table.Th>
+                                            </Table.Tr>
+                                        </Table.Thead>
+                                        <Table.Tbody>
+                                            {priceVolatility.gainers.map((item, i) => (
+                                                <Table.Tr key={item.model}>
+                                                    <Table.Td>
+                                                        <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
+                                                        <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="xs" fw={700}>{item.newPrice.toLocaleString()}원</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="xs" fw={700} c="red">+{item.pct.toFixed(1)}%</Text>
+                                                    </Table.Td>
+                                                </Table.Tr>
+                                            ))}
+                                            {priceVolatility.gainers.length === 0 && (
+                                                <Table.Tr><Table.Td colSpan={3} ta="center" py="xl" c="dimmed">변동 데이터 없음</Table.Td></Table.Tr>
+                                            )}
+                                        </Table.Tbody>
+                                    </Table>
+                                </Paper>
+                            </Grid.Col>
+                            <Grid.Col span={{ base: 12, md: 6 }}>
+                                <Paper withBorder p="md" radius="md">
+                                    <Group mb="xs">
+                                        <Badge color="blue" variant="filled" size="lg">TOP 10 가격 하락</Badge>
+                                        <Text size="xs" c="dimmed">전일 대비 (기존 카테고리/필터 내)</Text>
+                                    </Group>
+                                    <Table verticalSpacing="xs" highlightOnHover striped withColumnBorders withTableBorder>
+                                        <Table.Thead bg="blue.0">
+                                            <Table.Tr>
+                                                <Table.Th>제품명</Table.Th>
+                                                <Table.Th style={{ textAlign: 'right' }}>최신 가격</Table.Th>
+                                                <Table.Th style={{ textAlign: 'right' }}>변동률</Table.Th>
+                                            </Table.Tr>
+                                        </Table.Thead>
+                                        <Table.Tbody>
+                                            {priceVolatility.losers.map((item, i) => (
+                                                <Table.Tr key={item.model}>
+                                                    <Table.Td>
+                                                        <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
+                                                        <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="xs" fw={700}>{item.newPrice.toLocaleString()}원</Text>
+                                                    </Table.Td>
+                                                    <Table.Td style={{ textAlign: 'right' }}>
+                                                        <Text size="xs" fw={700} c="blue">{item.pct.toFixed(1)}%</Text>
+                                                    </Table.Td>
+                                                </Table.Tr>
+                                            ))}
+                                            {priceVolatility.losers.length === 0 && (
+                                                <Table.Tr><Table.Td colSpan={3} ta="center" py="xl" c="dimmed">변동 데이터 없음</Table.Td></Table.Tr>
+                                            )}
+                                        </Table.Tbody>
+                                    </Table>
+                                </Paper>
+                            </Grid.Col>
+                        </Grid>
                     </Tabs.Panel>
 
                     <Tabs.Panel value="brand">
