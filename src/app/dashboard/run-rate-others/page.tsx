@@ -46,7 +46,7 @@ const CustomTooltip = ({ active, payload, label, pLabel, sLabel }: any) => {
     return null;
 };
 
-export default function RunRatePage() {
+export default function RunRateOthersPage() {
     const [loading, setLoading] = useState(false);
 
 
@@ -208,7 +208,7 @@ export default function RunRatePage() {
 
             try {
                 console.time("LoadData"); // 시간 측정 시작
-                const data = await storageService.loadData();
+                const data = await storageService.loadData(false, 'dashboard_data_others.json');
                 console.timeEnd("LoadData"); // 시간 측정 종료
 
                 if (data && data.weeklyData) {
@@ -547,7 +547,7 @@ export default function RunRatePage() {
                 // 저장 및 화면 갱신
                 // 저장 및 화면 갱신
                 // [Changed] We no longer pre-calculate analysis data to allow dynamic calculation on the fly.
-                await storageService.saveData(parsedWeeklyData, parsedSnapshotData, [], detectedRefWeek);
+                await storageService.saveData(parsedWeeklyData, parsedSnapshotData, [], detectedRefWeek, 'dashboard_data_others.json');
 
                 setWeeklyData(parsedWeeklyData);
                 setSnapshotData(parsedSnapshotData); // Now array
@@ -1067,7 +1067,7 @@ export default function RunRatePage() {
         <Container fluid pos="relative">
             <LoadingOverlay visible={loading} zIndex={1000} overlayProps={{ radius: "sm", blur: 2 }} />
             <Group justify="space-between" mb="lg">
-                <Title order={2}>재고 및 판매분석(ASUS)</Title>
+                <Title order={2}>재고 및 판매분석(MANI&ASRock)</Title>
                 <Group>
                     <FileButton onChange={handleFileUpload} accept=".xlsx,.xls" multiple>
                         {(props) => (

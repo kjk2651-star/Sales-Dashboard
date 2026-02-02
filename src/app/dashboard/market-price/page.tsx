@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import {
-    Title, Card, Button, Group, Select, Table, Badge, ScrollArea, LoadingOverlay, Text, FileButton, Container, Grid, MultiSelect, Paper, Alert, List, ThemeIcon, Tabs
+    Title, Card, Button, Group, Select, Table, Badge, ScrollArea, LoadingOverlay, Text, FileButton, Container, Grid, MultiSelect, Paper, Alert, List, ThemeIcon, Tabs, Anchor
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { IconUpload, IconFileSpreadsheet, IconChartLine, IconCheck, IconX, IconFilter, IconChartBar, IconInfoCircle } from '@tabler/icons-react';
@@ -57,6 +57,26 @@ const CustomTooltip = ({ active, payload, label }: any) => {
     return null;
 };
 
+
+// --- Formatters ---
+const currencyFormatter = (value: number) => {
+    if (!value) return '0';
+    if (value >= 10000) return `${(value / 10000).toFixed(0)}만`;
+    return new Intl.NumberFormat().format(value);
+};
+
+const xAxisDateFormatter = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}-${d.getDate()}`;
+};
+
+const tableDateFormatter = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}-${d.getDate()}`;
+};
+
 export default function MarketPricePage() {
     const [history, setHistory] = useState<MarketHistory[]>([]);
     const [loading, setLoading] = useState(false);
@@ -69,6 +89,7 @@ export default function MarketPricePage() {
     const [selCategory, setSelCategory] = useState<string | null>(null);
     const [selBrand, setSelBrand] = useState<string | null>(null);
     const [selProducts, setSelProducts] = useState<string[]>([]);
+    const [searchValue, setSearchValue] = useState('');
 
     // Analysis Filters
     const [selChipsets, setSelChipsets] = useState<string[]>([]);
@@ -167,6 +188,7 @@ export default function MarketPricePage() {
                         let specVal = '';
                         const colChipset = keys.find(k => normalize(k) === 'CHIPSET' || normalize(k).includes('칩셋'));
                         const colSpec = keys.find(k => normalize(k).includes('SPEC') || normalize(k) === '규격');
+                        const colUrl = keys.find(k => normalize(k).includes('PRODUCTURL'));
 
                         if (colChipset) specVal = String(row[colChipset]).trim();
                         else if (colSpec) specVal = String(row[colSpec]).trim();
@@ -183,7 +205,8 @@ export default function MarketPricePage() {
                                 brand: colBrand ? String(row[colBrand]).trim() : 'Unknown',
                                 model: String(row[colModel]).trim(),
                                 spec: specVal,
-                                price: parseFloat(String(row[colPrice]).replace(/,/g, '')) || 0
+                                price: parseFloat(String(row[colPrice]).replace(/,/g, '')) || 0,
+                                productUrl: colUrl ? String(row[colUrl]).trim() : undefined
                             });
                         }
                     });
@@ -231,16 +254,24 @@ export default function MarketPricePage() {
 
     const uniqueModels = useMemo(() => {
         if (!selCategory) return [];
-        const models = new Set<string>();
+        const modelLatestDateMap = new Map<string, string>();
+
         history.forEach(h => h.items.forEach(i => {
             if (i.category === selCategory &&
                 (!selBrand || i.brand === selBrand) &&
                 (selChipsets.length === 0 || (i.spec && selChipsets.includes(i.spec)))
             ) {
-                models.add(i.model);
+                // Since history is sorted ASC, the last date we see for a model is the latest
+                modelLatestDateMap.set(i.model, h.date);
             }
         }));
-        return Array.from(models).sort();
+
+        return Array.from(modelLatestDateMap.entries())
+            .map(([model, date]) => ({
+                label: `${model} (${tableDateFormatter(date)})`,
+                value: model
+            }))
+            .sort((a, b) => a.value.localeCompare(b.value));
     }, [history, selCategory, selBrand, selChipsets]);
 
     const uniqueChipsets = useMemo(() => {
@@ -266,7 +297,7 @@ export default function MarketPricePage() {
 
         // (1) 존재하는 모든 날짜 수집 및 오름차순 정렬
         const allDates = Array.from(new Set(history.map(h => h.date))).sort(
-            (a, b) => new Date(a).getTime() - new Date(b).getTime()
+            (a, b) => new Date(a).getTime() - new Date(a).getTime()
         );
 
         // (2) 날짜별 데이터 생성
@@ -375,56 +406,76 @@ export default function MarketPricePage() {
         return history[history.length - 1].date;
     }, [history]);
 
-    // -- [New] 3. Price Volatility TOP 10 (Gainers/Losers) --
+    // -- [New] 3. Price Volatility TOP 10 (Gainers/Losers - Per Product History) --
+    interface ProductHistoryEntry extends MarketItem {
+        date: string;
+    }
+
     const priceVolatility = useMemo(() => {
-        if (history.length < 2 || !selCategory) return { gainers: [], losers: [] };
+        if (!selCategory || history.length === 0) return { gainers: [], losers: [] };
 
-        const allDates = Array.from(new Set(history.map(h => h.date))).sort(
-            (a, b) => new Date(b).getTime() - new Date(a).getTime() // Latest first
-        );
+        // 1. Group items by product key
+        const productHistoryMap = new Map<string, ProductHistoryEntry[]>();
 
-        if (allDates.length < 2) return { gainers: [], losers: [] };
+        // Walk history newest to oldest
+        const sortedHistory = [...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-        const d1 = allDates[0]; // Latest
-        const d2 = allDates[1]; // Previous
+        sortedHistory.forEach(h => {
+            h.items.forEach(item => {
+                if (item.category !== selCategory) return;
+                if (selBrand && item.brand !== selBrand) return;
+                if (selChipsets.length > 0 && (!item.spec || !selChipsets.includes(item.spec))) return;
 
-        const h1 = history.find(h => h.date === d1);
-        const h2 = history.find(h => h.date === d2);
-
-        if (!h1 || !h2) return { gainers: [], losers: [] };
+                const key = `${item.brand}|${item.model}`;
+                if (!productHistoryMap.has(key)) productHistoryMap.set(key, []);
+                productHistoryMap.get(key)!.push({ ...item, date: h.date });
+            });
+        });
 
         const diffs: any[] = [];
 
-        // Use h1 (latest) as base to find current products
-        h1.items.forEach(item1 => {
-            if (item1.category !== selCategory) return;
-            if (selBrand && item1.brand !== selBrand) return;
-            if (selChipsets.length > 0 && (!item1.spec || !selChipsets.includes(item1.spec))) return;
+        productHistoryMap.forEach((records) => {
+            // records are sorted by date desc
+            if (records.length >= 2) {
+                const latest = records[0];
+                // [Fix] Only include products that were updated on the GLOBAL latest date
+                if (latest.date !== globalLatestDate) return;
 
-            // Find same product in h2
-            const item2 = h2.items.find(i => i.model === item1.model && i.brand === item1.brand && i.category === item1.category);
+                const prev = records[1];
 
-            if (item2 && item2.price > 0 && item1.price > 0) {
-                const diff = item1.price - item2.price;
-                const pct = (diff / item2.price) * 100;
-                if (diff !== 0) {
-                    diffs.push({
-                        model: item1.model,
-                        brand: item1.brand,
-                        oldPrice: item2.price,
-                        newPrice: item1.price,
-                        diff,
-                        pct
-                    });
+                if (latest.price > 0 && prev.price > 0) {
+                    const diff = latest.price - prev.price;
+                    const pct = (diff / prev.price) * 100;
+                    if (diff !== 0) {
+                        diffs.push({
+                            model: latest.model,
+                            brand: latest.brand,
+                            oldPrice: prev.price,
+                            newPrice: latest.price,
+                            diff,
+                            pct,
+                            latestDate: latest.date,
+                            prevDate: prev.date,
+                            productUrl: latest.productUrl
+                        });
+                    }
                 }
             }
         });
 
-        const gainers = [...diffs].sort((a, b) => b.pct - a.pct).slice(0, 10);
-        const losers = [...diffs].sort((a, b) => a.pct - b.pct).slice(0, 10);
+        const gainers = diffs
+            .filter(d => d.pct > 0)
+            .sort((a, b) => b.pct - a.pct)
+            .slice(0, 10);
+
+        const losers = diffs
+            .filter(d => d.pct < 0)
+            .sort((a, b) => a.pct - b.pct)
+            .slice(0, 10);
 
         return { gainers, losers };
     }, [history, selCategory, selBrand, selChipsets]);
+
     const filteredTableData = useMemo(() => {
         if (!selCategory || history.length === 0) return [];
 
@@ -453,24 +504,7 @@ export default function MarketPricePage() {
             });
     }, [history, selCategory, selBrand, selProducts]);
 
-    // Formatters
-    const currencyFormatter = (value: number) => {
-        if (!value) return '0';
-        if (value >= 10000) return `${(value / 10000).toFixed(0)}만`;
-        return new Intl.NumberFormat().format(value);
-    };
 
-    const xAxisDateFormatter = (dateStr: string) => {
-        if (!dateStr) return '';
-        const d = new Date(dateStr);
-        return `${d.getMonth() + 1}-${d.getDate()}`;
-    };
-
-    const tableDateFormatter = (dateStr: string) => {
-        if (!dateStr) return '';
-        const d = new Date(dateStr);
-        return `${d.getMonth() + 1}-${d.getDate()}`;
-    };
 
     return (
         <Container fluid p="md">
@@ -538,7 +572,7 @@ export default function MarketPricePage() {
                         <Group mb="xs" align="flex-end">
                             <Select
                                 label="1. 브랜드 (선택)" placeholder="All Brands" data={uniqueBrands} value={selBrand}
-                                onChange={(v) => { setSelBrand(v); setSelProducts([]); }} searchable clearable disabled={!selCategory}
+                                onChange={(v) => { setSelBrand(v); }} searchable clearable disabled={!selCategory}
                                 w={180}
                             />
                             {(selCategory === 'MB' || selCategory === 'VGA') && (
@@ -549,9 +583,20 @@ export default function MarketPricePage() {
                                 />
                             )}
                             <MultiSelect
-                                label={`3. 모델 선택 (${uniqueModels.length}개)`} data={uniqueModels} value={selProducts} onChange={setSelProducts}
-                                searchable maxValues={5} flex={1} disabled={!selCategory}
-                                placeholder="최대 5개까지 비교 가능"
+                                label={`3. 모델 선택 (${uniqueModels.length}개)`}
+                                data={uniqueModels}
+                                value={selProducts}
+                                onChange={(val) => {
+                                    setSelProducts(val);
+                                    setSearchValue(''); // Clear search on select/unselect
+                                }}
+                                searchValue={searchValue}
+                                onSearchChange={setSearchValue}
+                                searchable
+                                maxValues={5}
+                                flex={1}
+                                disabled={!selCategory}
+                                placeholder="모델 검색 및 선택 (최대 5개)"
                             />
                         </Group>
 
@@ -562,24 +607,39 @@ export default function MarketPricePage() {
                                     <Table.Thead bg="blue.1">
                                         <Table.Tr>
                                             <Table.Th w={250}>모델명</Table.Th>
-                                            <Table.Th w={180} style={{ textAlign: 'right' }}>최신 가격 (날짜)</Table.Th>
-                                            <Table.Th style={{ textAlign: 'right' }}>MSRP</Table.Th>
+                                            <Table.Th w={200} style={{ textAlign: 'right' }}>최신 확인가격 (날짜)</Table.Th>
                                             <Table.Th style={{ textAlign: 'right' }}>GAP (%)</Table.Th>
                                         </Table.Tr>
                                     </Table.Thead>
                                     <Table.Tbody>
                                         {selProducts.map((model, idx) => {
-                                            const latestHist = history[history.length - 1];
-                                            const histItem = latestHist?.items.find(i => i.model === model && i.category === selCategory);
-                                            const latestPrice = histItem?.price || 0;
-                                            const latestDateStr = latestHist?.date || "N/A";
+                                            // Find latest record for THIS specific model across ALL history
+                                            let latestPrice = 0;
+                                            let latestDateStr = "N/A";
+                                            let latestItem: MarketItem | null = null;
+
+                                            for (let i = history.length - 1; i >= 0; i--) {
+                                                const item = history[i].items.find(it => it.model === model && it.category === selCategory);
+                                                if (item) {
+                                                    latestPrice = item.price;
+                                                    latestDateStr = history[i].date;
+                                                    latestItem = item;
+                                                    break;
+                                                }
+                                            }
 
                                             // Calculate GAP based on first selected model (idx 0)
                                             let gapStr = "-";
                                             let gapColor = "gray";
                                             if (idx > 0 && selProducts.length > 1) {
                                                 const baseModel = selProducts[0];
-                                                const basePrice = history[history.length - 1]?.items.find(i => i.model === baseModel && i.category === selCategory)?.price || 0;
+                                                // Find latest for base model
+                                                let basePrice = 0;
+                                                for (let i = history.length - 1; i >= 0; i--) {
+                                                    const item = history[i].items.find(it => it.model === baseModel && it.category === selCategory);
+                                                    if (item) { basePrice = item.price; break; }
+                                                }
+
                                                 if (basePrice > 0 && latestPrice > 0) {
                                                     const gap = ((basePrice - latestPrice) / latestPrice) * 100;
                                                     gapStr = `${gap > 0 ? '+' : ''}${gap.toFixed(1)}%`;
@@ -592,16 +652,19 @@ export default function MarketPricePage() {
                                                     <Table.Td>
                                                         <Group gap="xs">
                                                             <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }} />
-                                                            <Text size="sm" fw={idx === 0 ? 700 : 400}>{model}</Text>
+                                                            {latestItem?.productUrl ? (
+                                                                <Anchor href={latestItem.productUrl} target="_blank" size="sm" underline="hover" fw={idx === 0 ? 700 : 400}>
+                                                                    {model}
+                                                                </Anchor>
+                                                            ) : (
+                                                                <Text size="sm" fw={idx === 0 ? 700 : 400}>{model}</Text>
+                                                            )}
                                                             {idx === 0 && <Badge size="xs" variant="outline">기준</Badge>}
                                                         </Group>
                                                     </Table.Td>
                                                     <Table.Td style={{ textAlign: 'right' }}>
                                                         <Text size="sm" fw={700}>{latestPrice.toLocaleString()}원</Text>
                                                         <Text size="xs" c="dimmed">({tableDateFormatter(latestDateStr)})</Text>
-                                                    </Table.Td>
-                                                    <Table.Td style={{ textAlign: 'right' }}>
-                                                        <Text size="sm">{latestPrice.toLocaleString()}원</Text>
                                                     </Table.Td>
                                                     <Table.Td style={{ textAlign: 'right' }}>
                                                         <Text fw={700} c={gapColor}>{gapStr}</Text>
@@ -662,7 +725,7 @@ export default function MarketPricePage() {
                                 <Paper withBorder p="md" radius="md">
                                     <Group mb="xs">
                                         <Badge color="red" variant="filled" size="lg">TOP 10 가격 상승</Badge>
-                                        <Text size="xs" c="dimmed">전일 대비 (기존 카테고리/필터 내)</Text>
+                                        <Text size="xs" c="dimmed">최신날짜({tableDateFormatter(globalLatestDate)}) 업데이트 대비 (제품별 이전 기록과 비교)</Text>
                                     </Group>
                                     <Table verticalSpacing="xs" highlightOnHover striped withColumnBorders withTableBorder>
                                         <Table.Thead bg="red.0">
@@ -676,8 +739,17 @@ export default function MarketPricePage() {
                                             {priceVolatility.gainers.map((item, i) => (
                                                 <Table.Tr key={item.model}>
                                                     <Table.Td>
-                                                        <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
-                                                        <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                        {item.productUrl ? (
+                                                            <Anchor href={item.productUrl} target="_blank" size="xs" fw={500} lineClamp={1} underline="hover">
+                                                                {item.model}
+                                                            </Anchor>
+                                                        ) : (
+                                                            <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
+                                                        )}
+                                                        <Group gap={4}>
+                                                            <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                            <Text size="10px" c="orange" fw={500}>[{tableDateFormatter(item.prevDate)} 대비]</Text>
+                                                        </Group>
                                                     </Table.Td>
                                                     <Table.Td style={{ textAlign: 'right' }}>
                                                         <Text size="xs" fw={700}>{item.newPrice.toLocaleString()}원</Text>
@@ -698,7 +770,7 @@ export default function MarketPricePage() {
                                 <Paper withBorder p="md" radius="md">
                                     <Group mb="xs">
                                         <Badge color="blue" variant="filled" size="lg">TOP 10 가격 하락</Badge>
-                                        <Text size="xs" c="dimmed">전일 대비 (기존 카테고리/필터 내)</Text>
+                                        <Text size="xs" c="dimmed">최신날짜({tableDateFormatter(globalLatestDate)}) 업데이트 대비 (제품별 이전 기록과 비교)</Text>
                                     </Group>
                                     <Table verticalSpacing="xs" highlightOnHover striped withColumnBorders withTableBorder>
                                         <Table.Thead bg="blue.0">
@@ -712,8 +784,17 @@ export default function MarketPricePage() {
                                             {priceVolatility.losers.map((item, i) => (
                                                 <Table.Tr key={item.model}>
                                                     <Table.Td>
-                                                        <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
-                                                        <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                        {item.productUrl ? (
+                                                            <Anchor href={item.productUrl} target="_blank" size="xs" fw={500} lineClamp={1} underline="hover">
+                                                                {item.model}
+                                                            </Anchor>
+                                                        ) : (
+                                                            <Text size="xs" fw={500} lineClamp={1}>{item.model}</Text>
+                                                        )}
+                                                        <Group gap={4}>
+                                                            <Text size="10px" c="dimmed">{item.brand}</Text>
+                                                            <Text size="10px" c="blue" fw={500}>[{tableDateFormatter(item.prevDate)} 대비]</Text>
+                                                        </Group>
                                                     </Table.Td>
                                                     <Table.Td style={{ textAlign: 'right' }}>
                                                         <Text size="xs" fw={700}>{item.newPrice.toLocaleString()}원</Text>
@@ -779,67 +860,42 @@ export default function MarketPricePage() {
                                     {brandTrendSeries.length > 0 ? (
                                         <div style={{ height: 500, width: '100%' }}>
                                             <ResponsiveContainer>
-                                                <LineChart data={brandTrendData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                                                <LineChart data={brandTrendData} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                                     <XAxis
                                                         dataKey="date"
                                                         tickFormatter={xAxisDateFormatter}
-                                                        padding={{ left: 20, right: 20 }}
+                                                        padding={{ left: 30, right: 30 }}
+                                                        minTickGap={30}
                                                     />
-                                                    <YAxis domain={['auto', 'auto']} tickFormatter={currencyFormatter} width={40} />
+                                                    <YAxis domain={[0, 'auto']} tickFormatter={currencyFormatter} />
                                                     <Tooltip content={<CustomTooltip />} />
-                                                    <Legend verticalAlign="bottom" height={60} wrapperStyle={{ paddingTop: '20px' }} />
-                                                    {brandTrendSeries.map((s) => (
+                                                    <Legend verticalAlign="bottom" height={36} />
+                                                    {brandTrendSeries.map((series) => (
                                                         <Line
-                                                            key={s.name} type="monotone" dataKey={s.name} stroke={s.color}
-                                                            strokeWidth={2} dot={false} activeDot={{ r: 5 }}
-                                                            connectNulls={true} name={s.label}
+                                                            key={series.name}
+                                                            dataKey={series.name}
+                                                            name={series.name}
+                                                            type="monotone"
+                                                            stroke={series.color}
+                                                            strokeWidth={3}
+                                                            dot={{ r: 4, strokeWidth: 1 }}
+                                                            activeDot={{ r: 6 }}
+                                                            connectNulls={true}
+                                                            isAnimationActive={false}
                                                         />
                                                     ))}
                                                 </LineChart>
                                             </ResponsiveContainer>
                                         </div>
-                                    ) : <Text c="dimmed" ta="center" mt="xl">데이터 없음</Text>}
+                                    ) : (
+                                        <Alert color="blue" variant="light" icon={<IconFilter />}>브랜드 필터를 조정하여 시장 추이를 확인하세요.</Alert>
+                                    )}
                                 </Card>
                             </Grid.Col>
                         </Grid>
                     </Tabs.Panel>
                 </Tabs>
-            </Card>
-
-            {/* Table Section */}
-            <Card withBorder radius="md" p="md">
-                <Group mb="sm" justify="space-between">
-                    <Group>
-                        <IconFileSpreadsheet size={20} />
-                        <Text fw={700}>전체 제품 확인된 최신 가격 (Last Known Value)</Text>
-                        {selCategory && <Badge color="blue">{selCategory}</Badge>}
-                    </Group>
-                </Group>
-                <ScrollArea h={400}>
-                    <Table stickyHeader highlightOnHover striped>
-                        <Table.Thead bg="gray.1">
-                            <Table.Tr><Table.Th>Brand</Table.Th><Table.Th>Model Name</Table.Th><Table.Th>Spec</Table.Th><Table.Th style={{ textAlign: 'right' }}>Price (Date)</Table.Th></Table.Tr>
-                        </Table.Thead>
-                        <Table.Tbody>
-                            {filteredTableData.length > 0 ? (
-                                filteredTableData.slice(0, 50).map((item, idx) => (
-                                    <Table.Tr key={idx}>
-                                        <Table.Td>{item.brand}</Table.Td>
-                                        <Table.Td fw={500}>{item.model}</Table.Td>
-                                        <Table.Td>{item.spec || '-'}</Table.Td>
-                                        <Table.Td style={{ textAlign: 'right' }}>
-                                            <Text span fw={700} mr={6}>{item.price.toLocaleString()}원</Text>
-                                            {item.date !== globalLatestDate && (
-                                                <Text span size="xs" c="dimmed">({tableDateFormatter(item.date)})</Text>
-                                            )}
-                                        </Table.Td>
-                                    </Table.Tr>
-                                ))
-                            ) : (<Table.Tr><Table.Td colSpan={4} align="center" py="xl" c="dimmed">표시할 데이터가 없습니다.</Table.Td></Table.Tr>)}
-                        </Table.Tbody>
-                    </Table>
-                </ScrollArea>
             </Card>
         </Container>
     );

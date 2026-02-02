@@ -14,7 +14,8 @@ import { usePathname, useRouter } from "next/navigation";
 const data = [
     { link: "/dashboard", label: "홈", icon: IconHome },
     { link: "/dashboard/market-price", label: "시장 가격 비교", icon: IconScale },
-    { link: "/dashboard/run-rate", label: "재고 및 판매 분석", icon: IconChartBar },
+    { link: "/dashboard/run-rate", label: "재고 및 판매분석(ASUS)", icon: IconChartBar },
+    { link: "/dashboard/run-rate-others", label: "재고 및 판매분석(MANI&ASRock)", icon: IconChartBar },
 ];
 
 export default function DashboardLayout({

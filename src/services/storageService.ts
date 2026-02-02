@@ -2,23 +2,24 @@ import { ref, uploadString, getBytes } from "firebase/storage";
 import { storage } from "../lib/firebase";
 import { WeeklyData, MarketItem, MarketHistory } from "@/types/data";
 
-const FILE_PATH = 'dashboard_data.json';
+const DEFAULT_FILE_PATH = 'dashboard_data.json';
 
 // [Cache] Memory variable (persists while app is running)
-let cachedData: any = null;
+// Now stores cache per fileKey: { "dashboard_data.json": data, "dashboard_data_others.json": data2 }
+let cachedData: Record<string, any> = {};
 
 export const storageService = {
     // Load Data
-    loadData: async (forceRefresh = false) => {
+    loadData: async (forceRefresh = false, fileKey = DEFAULT_FILE_PATH) => {
         try {
             // 1. Return Cache if available
-            if (cachedData && !forceRefresh) {
-                console.log("⚡ [Cache] Returning data from memory (Instant Load).");
-                return cachedData;
+            if (cachedData[fileKey] && !forceRefresh) {
+                console.log(`⚡ [Cache] Returning data from memory for ${fileKey} (Instant Load).`);
+                return cachedData[fileKey];
             }
 
-            console.log("📥 [Download] Fetching from Firebase Storage...");
-            const fileRef = ref(storage, FILE_PATH);
+            console.log(`📥 [Download] Fetching from Firebase Storage (${fileKey})...`);
+            const fileRef = ref(storage, fileKey);
 
             // 2. Download as Bytes (Avoid CORS)
             const bytes = await getBytes(fileRef);
@@ -27,30 +28,30 @@ export const storageService = {
             const data = JSON.parse(jsonStr);
 
             // 4. Update Cache
-            cachedData = data;
-            console.log("✅ [Download] Data cached.");
+            cachedData[fileKey] = data;
+            console.log(`✅ [Download] Data cached for ${fileKey}.`);
 
             return data;
 
         } catch (error: any) {
             // If file doesn't exist (First use), return null (Not an error)
             if (error.code === 'storage/object-not-found') {
-                console.log("ℹ️ [Service] No saved data found (New User). Returning null.");
-                cachedData = null; // Clear cache
+                console.log(`ℹ️ [Service] No saved data found for ${fileKey} (New User). Returning null.`);
+                cachedData[fileKey] = null; // Clear cache for this key
                 return null;
             }
-            console.error("❌ Load Error:", error);
+            console.error(`❌ Load Error (${fileKey}):`, error);
             throw error;
         }
     },
 
     // Save Data (Merge & Upload)
-    saveData: async (newWeeklyData: WeeklyData[], newSnapshot: any, analysisResult: any[], referenceWeek?: string) => {
+    saveData: async (newWeeklyData: WeeklyData[], newSnapshot: any, analysisResult: any[], referenceWeek?: string, fileKey = DEFAULT_FILE_PATH) => {
         try {
             // 1. Load Existing Data (Use Cache logic inside loadData)
             let existingWeekly: WeeklyData[] = [];
             try {
-                const currentData = await storageService.loadData();
+                const currentData = await storageService.loadData(false, fileKey);
                 if (currentData && currentData.weeklyData) {
                     existingWeekly = currentData.weeklyData;
                 }
@@ -82,7 +83,7 @@ export const storageService = {
             });
 
             const mergedWeekly = Array.from(uniqueMap.values());
-            console.log(`✅ Merged Data: Existing ${existingWeekly.length} + New ${newWeeklyData.length} -> Final ${mergedWeekly.length}`);
+            console.log(`✅ Merged Data (${fileKey}): Existing ${existingWeekly.length} + New ${newWeeklyData.length} -> Final ${mergedWeekly.length}`);
 
             const finalData = {
                 weeklyData: mergedWeekly,
@@ -93,25 +94,30 @@ export const storageService = {
             };
 
             // 3. Upload
-            const fileRef = ref(storage, FILE_PATH);
+            const fileRef = ref(storage, fileKey);
             await uploadString(fileRef, JSON.stringify(finalData), 'raw', { contentType: 'application/json' });
 
             // [Cache] Update Cache with new data
-            cachedData = finalData;
-            console.log("✅ Data saved to Storage & Cache updated.");
+            cachedData[fileKey] = finalData;
+            console.log(`✅ Data saved to Storage & Cache updated for ${fileKey}.`);
 
             return mergedWeekly;
 
         } catch (error) {
-            console.error("❌ Save Error:", error);
+            console.error(`❌ Save Error (${fileKey}):`, error);
             throw error;
         }
     },
 
     // Optional: Clear Cache manually
-    clearCache: () => {
-        cachedData = null;
-        console.log("🧹 Cache cleared.");
+    clearCache: (fileKey?: string) => {
+        if (fileKey) {
+            delete cachedData[fileKey];
+            console.log(`🧹 Cache cleared for ${fileKey}.`);
+        } else {
+            cachedData = {};
+            console.log("🧹 All caches cleared.");
+        }
     },
 
     // --- Market Price History ---

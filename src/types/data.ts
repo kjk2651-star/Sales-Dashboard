@@ -47,6 +47,7 @@ export interface MarketItem {
     model: string;
     spec: string;
     price: number;
+    productUrl?: string;
 }
 
 export interface MarketHistory {
