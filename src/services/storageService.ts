@@ -45,55 +45,21 @@ export const storageService = {
         }
     },
 
-    // Save Data (Merge & Upload)
+    // Save Data (Replace & Upload)
     saveData: async (newWeeklyData: WeeklyData[], newSnapshot: any, analysisResult: any[], referenceWeek?: string, fileKey = DEFAULT_FILE_PATH) => {
         try {
-            // 1. Load Existing Data (Use Cache logic inside loadData)
-            let existingWeekly: WeeklyData[] = [];
-            try {
-                const currentData = await storageService.loadData(false, fileKey);
-                if (currentData && currentData.weeklyData) {
-                    existingWeekly = currentData.weeklyData;
-                }
-            } catch (e) { /* Ignore load error on save */ }
-
-            // 2. Merge Data (De-duplication)
-            // Key: Year-Week-Distributor-Model-Dealer-Type-Product
-            const uniqueMap = new Map<string, WeeklyData>();
-
-            // Helper to generate Unique Key (Includes id/date/rowIndex for better distinctness)
-            const genKey = (d: WeeklyData) => {
-                // If there's a pre-calculated ID from UI (e.g. ROW_8_...), use it as the primary key
-                if (d.id) return d.id;
-
-                // Fallback for older data or different types
-                const base = `${d.year}_${d.week}_${d.distributor}_${d.modelName}_${d.dealerName || ''}_${d.categoryType || ''}_${d.product || ''}`;
-                const detail = `${d.date || ''}_${d.rowIndex || ''}`;
-                return `${base}_${detail}`;
-            };
-
-            // Add Existing Data to Map
-            existingWeekly.forEach(d => {
-                uniqueMap.set(genKey(d), d);
-            });
-
-            // Overwrite/Add New Data
-            newWeeklyData.forEach(d => {
-                uniqueMap.set(genKey(d), d);
-            });
-
-            const mergedWeekly = Array.from(uniqueMap.values());
-            console.log(`✅ Merged Data (${fileKey}): Existing ${existingWeekly.length} + New ${newWeeklyData.length} -> Final ${mergedWeekly.length}`);
+            // 업로드된 데이터로 완전 교체 (누적 방지)
+            console.log(`✅ Replacing Data (${fileKey}): New ${newWeeklyData.length} rows`);
 
             const finalData = {
-                weeklyData: mergedWeekly,
-                currentSnapshot: newSnapshot, // Snapshot is always replaced by latest
-                analysisResult: analysisResult, // Persist calculated verification data
+                weeklyData: newWeeklyData,
+                currentSnapshot: newSnapshot,
+                analysisResult: analysisResult,
                 referenceWeek: referenceWeek || "N/A",
                 updatedAt: new Date().toISOString()
             };
 
-            // 3. Upload
+            // Upload
             const fileRef = ref(storage, fileKey);
             await uploadString(fileRef, JSON.stringify(finalData), 'raw', { contentType: 'application/json' });
 
@@ -101,7 +67,7 @@ export const storageService = {
             cachedData[fileKey] = finalData;
             console.log(`✅ Data saved to Storage & Cache updated for ${fileKey}.`);
 
-            return mergedWeekly;
+            return newWeeklyData;
 
         } catch (error) {
             console.error(`❌ Save Error (${fileKey}):`, error);
