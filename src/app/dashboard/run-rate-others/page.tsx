@@ -60,6 +60,7 @@ export default function RunRateOthersPage() {
     // [New] Dynamic Settings
     const [targetWeeks, setTargetWeeks] = useState<number>(8);
     const [runRateBasis, setRunRateBasis] = useState<number>(4);
+    const [rawDownloading, setRawDownloading] = useState(false);
 
     // Extracted Options for Filters
     const [optYears, setOptYears] = useState<string[]>([]);
@@ -548,6 +549,7 @@ export default function RunRateOthersPage() {
                 // 저장 및 화면 갱신
                 // [Changed] We no longer pre-calculate analysis data to allow dynamic calculation on the fly.
                 await storageService.saveData(parsedWeeklyData, parsedSnapshotData, [], detectedRefWeek, 'dashboard_data_others.json');
+                await storageService.saveRawFile(file, 'dashboard_raw_others.xlsx');
 
                 setWeeklyData(parsedWeeklyData);
                 setSnapshotData(parsedSnapshotData); // Now array
@@ -569,8 +571,23 @@ export default function RunRateOthersPage() {
         }
     };
 
-    // [New] 현재 조회 데이터 다운로드 (필터 적용됨) - Removed
-    // const handleExportFilteredData = ... (Removed)
+    const handleDownloadRaw = async () => {
+        setRawDownloading(true);
+        try {
+            const blob = await storageService.downloadRawFile('dashboard_raw_others.xlsx');
+            if (!blob) { alert('저장된 원본 파일이 없습니다. 먼저 데이터를 업로드해주세요.'); return; }
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'dashboard_raw_others.xlsx';
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch {
+            alert('다운로드 중 오류가 발생했습니다.');
+        } finally {
+            setRawDownloading(false);
+        }
+    };
 
     // --- Data Logic: Filtering & Aggregation ---
 
@@ -1079,6 +1096,9 @@ export default function RunRateOthersPage() {
                             </Button>
                         )}
                     </FileButton>
+                    <Button size="xs" variant="light" color="green" leftSection={<IconDownload size={14} />} loading={rawDownloading} onClick={handleDownloadRaw}>
+                        원본 파일 다운로드
+                    </Button>
                     <Badge size="lg" color="blue">{totalSelectedSales.toLocaleString()} Units Sold</Badge>
                 </Group>
             </Group>

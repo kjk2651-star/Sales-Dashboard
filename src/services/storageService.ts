@@ -1,4 +1,4 @@
-import { ref, uploadString, getBytes } from "firebase/storage";
+import { ref, uploadString, getBytes, uploadBytes } from "firebase/storage";
 import { storage } from "../lib/firebase";
 import { WeeklyData, MarketItem, MarketHistory } from "@/types/data";
 
@@ -71,6 +71,32 @@ export const storageService = {
 
         } catch (error) {
             console.error(`❌ Save Error (${fileKey}):`, error);
+            throw error;
+        }
+    },
+
+    // Save Raw Excel File
+    saveRawFile: async (file: File, fileKey: string) => {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const fileRef = ref(storage, fileKey);
+            await uploadBytes(fileRef, arrayBuffer, { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            console.log(`✅ [Raw] Original file saved as ${fileKey}.`);
+        } catch (error) {
+            console.error(`❌ Raw File Save Error (${fileKey}):`, error);
+            throw error;
+        }
+    },
+
+    // Download Raw Excel File
+    downloadRawFile: async (fileKey: string): Promise<Blob | null> => {
+        try {
+            const fileRef = ref(storage, fileKey);
+            const bytes = await getBytes(fileRef);
+            return new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        } catch (error: any) {
+            if (error.code === 'storage/object-not-found') return null;
+            console.error(`❌ Raw File Download Error (${fileKey}):`, error);
             throw error;
         }
     },
