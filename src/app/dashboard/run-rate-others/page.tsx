@@ -955,19 +955,22 @@ export default function RunRateOthersPage() {
         });
 
         const granularResult = Array.from(uniqueKeys).map(key => {
-            const [dist, model] = key.split('_');
+            const firstUnderscore = key.indexOf('_');
+            const dist = key.slice(0, firstUnderscore);
+            const model = key.slice(firstUnderscore + 1);
 
-            // Find matching snapshot item
-            const snap = snapshotData.find(s => (s.distributor || "Intech") === dist && s.modelName === model);
+            // Find ALL matching snapshot rows (same model may appear in multiple rows per distributor)
+            const matchingSnaps = snapshotData.filter(s => (s.distributor || "Intech") === dist && s.modelName === model);
+            const snap = matchingSnaps[0] ?? null; // for metadata (chipset etc)
 
             // Get Sales (Total N weeks)
             const totalSalesNW = salesMap.get(key) || 0;
             const runRate = totalSalesNW / runRateBasis; // [Changed] Dynamic divisor
 
-            // Get Stock & Backlog (From Snapshot)
-            const stock = snap ? (snap.availableStock || snap.totalStock || 0) : 0;
-            const po = snap ? (snap.poQty || 0) : 0;
-            const otw = snap ? (snap.otwQty || 0) : 0;
+            // Get Stock & Backlog (Sum ALL matching rows)
+            const stock = matchingSnaps.reduce((sum, s) => sum + (s.availableStock || s.totalStock || 0), 0);
+            const po = matchingSnaps.reduce((sum, s) => sum + (s.poQty || 0), 0);
+            const otw = matchingSnaps.reduce((sum, s) => sum + (s.otwQty || 0), 0);
 
             // [Optimized] Pre-find metadata from full history to avoid multiple find calls
             const historyItem = weeklyData.find(d => d.modelName === model && d.chipset && d.chipset !== "Unknown");

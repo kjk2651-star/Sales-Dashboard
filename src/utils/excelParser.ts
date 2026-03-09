@@ -149,7 +149,7 @@ export const parseExcel = async (file: File): Promise<ParsedExcelResult> => {
 
                         if (yearKey && weekKey && modelKey && qtyKey) {
 
-                            // --- [Pass 1] Find Max Week ---
+                            // --- [Pass 1] Find Global Max Week (for referenceWeek display only) ---
                             let maxYear = 0;
                             let maxWeekNum = 0;
                             let maxWeekStr = "";
@@ -173,54 +173,69 @@ export const parseExcel = async (file: File): Promise<ParsedExcelResult> => {
                                 console.log(`📅 Latest Inventory Date: ${referenceWeek} (Key: ${maxYear}, ${maxWeekNum})`);
                             }
 
-                            // --- [Pass 2] Filter & Aggregate ---
-                            let matchCount = 0;
+                            // --- [Pass 1-B] Find Max Week PER (DISTRIBUTOR, MODEL) ---
+                            // Each distributor may update their data at different rates
+                            const entryMaxWeek = new Map<string, { year: number; week: number }>();
                             rawData.forEach((row: any) => {
+                                const rawModelName = row[modelKey];
+                                if (!rawModelName) return;
+                                const normalizedModel = String(rawModelName).replace(/\s+/g, '').toUpperCase();
+                                const distributor = distKey ? String(row[distKey] || "Intech").trim() : "Intech";
+                                const entryKey = `${distributor}_${normalizedModel}`;
                                 const yVal = parseInt(String(row[yearKey]).replace(/\D/g, ''), 10) || 0;
                                 const wVal = parseInt(String(row[weekKey]).replace(/\D/g, ''), 10) || 0;
 
-                                // Filter by Max Week
-                                if (yVal === maxYear && wVal === maxWeekNum) {
-                                    const rawModelName = row[modelKey];
-                                    if (!rawModelName) return;
-
-                                    // QTY Parsing (Handle commas explicitly)
-                                    let qtyVal = row[qtyKey];
-                                    if (typeof qtyVal === 'string') {
-                                        qtyVal = parseFloat(qtyVal.replace(/,/g, ''));
-                                    }
-                                    const qty = Number(qtyVal) || 0;
-
-                                    // Normalize Model Name for Aggregation Key
-                                    // "RTX 3080 " -> "RTX3080"
-                                    const normalizedKey = String(rawModelName).replace(/\s+/g, '').toUpperCase();
-
-                                    // Extract Extras
-                                    const chipset = chipsetKey ? (row[chipsetKey] || "Unknown") : "Unknown";
-                                    const distributor = distKey ? (row[distKey] || "Intech") : "Intech";
-
-                                    if (!snapshotMap.has(normalizedKey)) {
-                                        snapshotMap.set(normalizedKey, {
-                                            modelName: String(rawModelName).trim(), // Keep original name for display? Or normalized? User code implied 'normalizedKey' used for mapping. 
-                                            // Let's store trimmed original for better readability, but allow aggregation by normalized.
-                                            chipset: String(chipset).trim(),
-                                            availableStock: 0,
-                                            totalStock: 0,
-                                            incomingQty: 0,
-                                            incomingAmount: 0,
-                                            distributor: String(distributor).trim()
-                                        });
-                                    }
-
-                                    const entry = snapshotMap.get(normalizedKey)!;
-                                    entry.availableStock += qty;
-                                    entry.totalStock += qty;
-
-                                    if (entry.chipset === "Unknown" && chipset !== "Unknown") entry.chipset = chipset;
-                                    matchCount++;
+                                const current = entryMaxWeek.get(entryKey);
+                                if (!current || yVal > current.year || (yVal === current.year && wVal > current.week)) {
+                                    entryMaxWeek.set(entryKey, { year: yVal, week: wVal });
                                 }
                             });
-                            console.log(`✅ Loaded ${matchCount} rows for week ${referenceWeek}`);
+
+                            // --- [Pass 2] Aggregate using per-(distributor, model) max week ---
+                            let matchCount = 0;
+                            rawData.forEach((row: any) => {
+                                const rawModelName = row[modelKey];
+                                if (!rawModelName) return;
+
+                                const normalizedModel = String(rawModelName).replace(/\s+/g, '').toUpperCase();
+                                const distributor = distKey ? String(row[distKey] || "Intech").trim() : "Intech";
+                                const entryKey = `${distributor}_${normalizedModel}`;
+                                const yVal = parseInt(String(row[yearKey]).replace(/\D/g, ''), 10) || 0;
+                                const wVal = parseInt(String(row[weekKey]).replace(/\D/g, ''), 10) || 0;
+
+                                // Only include rows from this (distributor, model)'s own latest week
+                                const entryMax = entryMaxWeek.get(entryKey);
+                                if (!entryMax || yVal !== entryMax.year || wVal !== entryMax.week) return;
+
+                                // QTY Parsing (Handle commas explicitly)
+                                let qtyVal = row[qtyKey];
+                                if (typeof qtyVal === 'string') {
+                                    qtyVal = parseFloat(qtyVal.replace(/,/g, ''));
+                                }
+                                const qty = Number(qtyVal) || 0;
+
+                                const chipset = chipsetKey ? (row[chipsetKey] || "Unknown") : "Unknown";
+
+                                if (!snapshotMap.has(entryKey)) {
+                                    snapshotMap.set(entryKey, {
+                                        modelName: String(rawModelName).trim(),
+                                        chipset: String(chipset).trim(),
+                                        availableStock: 0,
+                                        totalStock: 0,
+                                        incomingQty: 0,
+                                        incomingAmount: 0,
+                                        distributor: distributor
+                                    });
+                                }
+
+                                const entry = snapshotMap.get(entryKey)!;
+                                entry.availableStock += qty;
+                                entry.totalStock += qty;
+
+                                if (entry.chipset === "Unknown" && chipset !== "Unknown") entry.chipset = chipset;
+                                matchCount++;
+                            });
+                            console.log(`✅ Loaded ${matchCount} rows (per-distributor latest week, ref: ${referenceWeek})`);
                         } else {
                             console.error("❌ Column Header Mismatch! Needed: YEAR, WEEK, 변환ModelName, QTY");
                             console.group("Found Keys:");
